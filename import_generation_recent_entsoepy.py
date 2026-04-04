@@ -91,6 +91,9 @@ ZONES = [
     ("RS", "RS"),
     ("BA", "BA"),
     ("ME", "ME"),
+    
+    # Ireland (ISEM)
+    ("IE_SEM", "IE-SEM"),
 ]
 
 # ------------- CLIENT ----------------

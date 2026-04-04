@@ -154,9 +154,9 @@ jobs:
           PG_PASS: ${{ secrets.PG_PASS }}
           PG_SSLMODE: ${{ secrets.PG_SSLMODE }}
 
-          ROLLING_WINDOW_DAYS: "150"
+          ROLLING_WINDOW_DAYS: "30"
           ROLLING_WINDOW_HOURS: "0"
-          CHUNK_DAYS: "7"
+          CHUNK_DAYS: "0"
           SLEEP_BETWEEN_ZONES_SEC: "0.5"
         run: |
           python import_generation_recent_entsoepy.py

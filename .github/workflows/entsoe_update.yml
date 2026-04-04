@@ -156,7 +156,7 @@ jobs:
 
           ROLLING_WINDOW_DAYS: "150"
           ROLLING_WINDOW_HOURS: "0"
-          CHUNK_DAYS: "0"
+          CHUNK_DAYS: "7"
           SLEEP_BETWEEN_ZONES_SEC: "0.5"
         run: |
           python import_generation_recent_entsoepy.py

@@ -1,4 +1,4 @@
-name: ENTSO-E update
+name: ENTSO-E generation by production type update
 
 on:
   workflow_dispatch: {}

@@ -216,8 +216,9 @@ def upsert_prices(records):
 def main():
     print(f"=== ENTSO-E Day-Ahead Prices | Rolling {ROLLING_WINDOW_DAYS}d window ===")
 
-    end_utc   = dt.datetime.now(dt.timezone.utc).replace(minute=0, second=0, microsecond=0)
-    start_utc = end_utc - dt.timedelta(days=ROLLING_WINDOW_DAYS)
+    now_utc   = dt.datetime.now(dt.timezone.utc).replace(minute=0, second=0, microsecond=0)
+    start_utc = now_utc - dt.timedelta(days=ROLLING_WINDOW_DAYS)
+    end_utc   = now_utc + dt.timedelta(days=2)  # include tomorrow's published prices
 
     print(f"[INFO] Fetching from {start_utc} → {end_utc}")
     print(f"[INFO] Zones: {len(ZONES)}")

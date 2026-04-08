@@ -9,6 +9,7 @@ import traceback
 import pandas as pd
 import requests
 from entsoe import EntsoePandasClient
+from entsoe.exceptions import NoMatchingDataError
 import psycopg2
 from psycopg2.extras import execute_values
 
@@ -27,13 +28,10 @@ PG_SSLMODE = os.getenv("PG_SSLMODE", "require")
 ROLLING_WINDOW_DAYS = int(os.getenv("ROLLING_WINDOW_DAYS", "3"))
 
 ZONES = [
-    ("AL",      "AL"),
     ("AT",      "AT"),
     ("BE",      "BE"),
-    ("BA",      "BA"),
     ("BG",      "BG"),
     ("HR",      "HR"),
-    ("CY",      "CY"),
     ("CZ",      "CZ"),
     ("DE_LU",   "DE-LU"),
     ("DK_1",    "DK1"),
@@ -53,9 +51,7 @@ ZONES = [
     ("IT_SARD", "IT-SARD"),
     ("LV",      "LV"),
     ("LT",      "LT"),
-    ("MT",      "MT"),
     ("ME",      "ME"),
-    ("GB",      "GB"),
     ("NL",      "NL"),
     ("NO_1",    "NO1"),
     ("NO_2",    "NO2"),
@@ -74,7 +70,6 @@ ZONES = [
     ("SE_3",    "SE3"),
     ("SE_4",    "SE4"),
     ("CH",      "CH"),
-    ("XK",      "XK"),
     ("MK",      "MK"),
 ]
 
@@ -109,6 +104,10 @@ def fetch_prices(country_code: str, start_utc: dt.datetime, end_utc: dt.datetime
         )
         print(f"[INFO] Got {len(series)} price points for {country_code}")
         return series
+
+    except NoMatchingDataError:
+        print(f"[WARN] No data available for {country_code}, skipping.")
+        return None
 
     except requests.HTTPError as e:
         body = getattr(e.response, "text", "") if hasattr(e, "response") else ""
@@ -160,7 +159,7 @@ def series_to_records(series, bidding_zone: str):
     series = series.copy()
 
     if series.index.tz is None:
-        series.index = series.index.tz_localize("Europe/Berlin").tz_convert("UTC")
+        series.index = series.index.tz_localize("UTC")
     else:
         series.index = series.index.tz_convert("UTC")
 
@@ -180,36 +179,22 @@ def series_to_records(series, bidding_zone: str):
 
 # ------------- DB UPSERT ----------------
 
-def upsert_prices(records):
+def upsert_prices(conn, records):
     if not records:
         print("[WARN] Nothing to upsert.")
         return
 
-    print(f"[INFO] Connecting to DB at {PG_HOST}:{PG_PORT}/{PG_DB}")
-
-    conn = psycopg2.connect(
-        host=PG_HOST,
-        port=PG_PORT,
-        dbname=PG_DB,
-        user=PG_USER,
-        password=PG_PASS,
-        sslmode=PG_SSLMODE,
-    )
-
-    try:
-        with conn.cursor() as cur:
-            sql = """
-                INSERT INTO day_ahead_prices_ts
-                    (time_utc, bidding_zone, price_eur_mwh, source)
-                VALUES %s
-                ON CONFLICT (time_utc, bidding_zone, source)
-                DO UPDATE SET price_eur_mwh = EXCLUDED.price_eur_mwh;
-            """
-            execute_values(cur, sql, records)
-        conn.commit()
-        print(f"[INFO] Upserted {len(records)} price rows.")
-    finally:
-        conn.close()
+    with conn.cursor() as cur:
+        sql = """
+            INSERT INTO day_ahead_prices_ts
+                (time_utc, bidding_zone, price_eur_mwh, source)
+            VALUES %s
+            ON CONFLICT (time_utc, bidding_zone, source)
+            DO UPDATE SET price_eur_mwh = EXCLUDED.price_eur_mwh;
+        """
+        execute_values(cur, sql, records)
+    conn.commit()
+    print(f"[INFO] Upserted {len(records)} price rows.")
 
 # ------------- MAIN ----------------
 
@@ -223,16 +208,30 @@ def main():
     print(f"[INFO] Fetching from {start_utc} → {end_utc}")
     print(f"[INFO] Zones: {len(ZONES)}")
 
-    for country_code, bidding_zone in ZONES:
-        print(f"\n[ZONE] Processing {bidding_zone} ({country_code})")
-        try:
-            series  = fetch_prices(country_code, start_utc, end_utc)
-            records = series_to_records(series, bidding_zone)
-            upsert_prices(records)
-        except Exception as e:
-            print(f"[ERROR] Failed for {bidding_zone}: {e}")
-            traceback.print_exc()
-            print("[INFO] Continuing to next zone...")
+    conn = psycopg2.connect(
+        host=PG_HOST,
+        port=PG_PORT,
+        dbname=PG_DB,
+        user=PG_USER,
+        password=PG_PASS,
+        sslmode=PG_SSLMODE,
+    )
+    print(f"[INFO] Connected to DB at {PG_HOST}:{PG_PORT}/{PG_DB}")
+
+    try:
+        for country_code, bidding_zone in ZONES:
+            print(f"\n[ZONE] Processing {bidding_zone} ({country_code})")
+            try:
+                series  = fetch_prices(country_code, start_utc, end_utc)
+                records = series_to_records(series, bidding_zone)
+                upsert_prices(conn, records)
+            except Exception as e:
+                print(f"[ERROR] Failed for {bidding_zone}: {e}")
+                traceback.print_exc()
+                print("[INFO] Continuing to next zone...")
+    finally:
+        conn.close()
+        print("[INFO] DB connection closed.")
 
     print("\n=== COMPLETE ===")
 

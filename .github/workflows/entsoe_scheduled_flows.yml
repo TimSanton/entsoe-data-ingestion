@@ -3,12 +3,19 @@ name: ENTSO-E Scheduled Flows update
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "00 13 * * *"   # daily refresher (after day-ahead published ~12:00 CET)   # daily refresher (after day-ahead published ~12:00 CET)
-    - cron: "30 4 * * *"    # daily 3d backfill
+    - cron: "00 11 * * *"   # first attempt  - covers summer (13:00 CEST = 11:00 UTC)
+    - cron: "00 12 * * *"   # second attempt - covers winter (13:00 CET = 12:00 UTC) + lag buffer
+    - cron: "00 13 * * *"   # third attempt  - safety net for late publication or heavy lag
+    - cron: "30 4  * * *"   # daily 3d backfill
 
 jobs:
   refresher:
-    if: github.event_name == 'schedule' && github.event.schedule == '00 13 * * *'
+    if: |
+      github.event_name == 'schedule' && (
+        github.event.schedule == '00 11 * * *' ||
+        github.event.schedule == '00 12 * * *' ||
+        github.event.schedule == '00 13 * * *'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

@@ -190,7 +190,9 @@ def upsert_prices(conn, records):
                 (time_utc, bidding_zone, price_eur_mwh, source)
             VALUES %s
             ON CONFLICT (time_utc, bidding_zone, source)
-            DO UPDATE SET price_eur_mwh = EXCLUDED.price_eur_mwh;
+            DO UPDATE SET
+                price_eur_mwh = EXCLUDED.price_eur_mwh,
+                created_at    = NOW();
         """
         execute_values(cur, sql, records)
     conn.commit()

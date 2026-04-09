@@ -196,7 +196,9 @@ def upsert_rows(conn, rows: list):
             (time_utc, from_zone, to_zone, flow_mw, contract_type, source)
         VALUES %s
         ON CONFLICT (time_utc, from_zone, to_zone, contract_type, source)
-        DO UPDATE SET flow_mw = EXCLUDED.flow_mw
+        DO UPDATE SET
+            flow_mw    = EXCLUDED.flow_mw,
+            created_at = NOW()
     """
     with conn.cursor() as cur:
         execute_values(cur, sql, rows)

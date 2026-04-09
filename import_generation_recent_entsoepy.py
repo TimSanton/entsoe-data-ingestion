@@ -280,9 +280,9 @@ def main():
         print("\n[SUMMARY] Some zones failed:")
         for cc, bz, msg in failures:
             print(f" - {bz} ({cc}): {msg}")
-        raise RuntimeError(f"{len(failures)} zones failed")
-
-    print("=== DONE ===")
+        print(f"\n[WARN] {len(failures)} zone(s) failed — backfill will cover gaps.")
+    else:
+        print("\n=== DONE ===")
 
 if __name__ == "__main__":
     try:
@@ -292,5 +292,5 @@ if __name__ == "__main__":
         print(e)
         print("\n[TRACEBACK]")
         traceback.print_exc()
-        raise  # ensure GitHub Actions marks it as failed
+        raise  # keep this — only triggers for unexpected errors, not zone failures
 

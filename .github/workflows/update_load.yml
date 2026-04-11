@@ -1,0 +1,154 @@
+name: ENTSO-E load update
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "22 * * * *"   # hourly refresher
+    - cron: "45 3 * * *"   # daily 3d revision backfill
+
+jobs:
+  refresher:
+    if: github.event_name == 'schedule' && github.event.schedule == '22 * * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    concurrency:
+      group: entsoe-load-refresher
+      cancel-in-progress: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install OS tzdata
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tzdata
+
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --no-cache-dir tzdata
+          python -m pip install --no-cache-dir -r requirements.txt
+
+      - name: Patch entsoe-py timezone bug
+        shell: bash
+        run: |
+          python - <<'PY'
+          import site, pathlib
+
+          for sp in site.getsitepackages():
+              p = pathlib.Path(sp) / "entsoe" / "entsoe.py"
+              if p.exists():
+                  txt = p.read_text(encoding="utf-8")
+                  if "europe/amsterdam" in txt:
+                      p.write_text(
+                          txt.replace("europe/amsterdam", "Europe/Amsterdam"),
+                          encoding="utf-8"
+                      )
+                      print("Patched:", p)
+                  else:
+                      print("No patch needed:", p)
+                  break
+          else:
+              raise SystemExit("entsoe/entsoe.py not found")
+          PY
+
+      - name: Verify timezone availability
+        run: |
+          python - <<'PY'
+          import zoneinfo
+          z = zoneinfo.ZoneInfo("Europe/Amsterdam")
+          print("ZoneInfo loaded:", z)
+          PY
+
+      - name: Run load update (refresher)
+        env:
+          ENTSOE_API_TOKEN: ${{ secrets.ENTSOE_API_TOKEN }}
+          PG_HOST:          ${{ secrets.PG_HOST }}
+          PG_PORT:          ${{ secrets.PG_PORT }}
+          PG_DB:            ${{ secrets.PG_DB }}
+          PG_USER:          ${{ secrets.PG_USER }}
+          PG_PASS:          ${{ secrets.PG_PASS }}
+          PG_SSLMODE:       ${{ secrets.PG_SSLMODE }}
+          ROLLING_WINDOW_DAYS: "2"
+          SLEEP_BETWEEN_ZONES_SEC: "1"
+        run: python update_load.py
+
+  revision_backfill_3d:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.event.schedule == '45 3 * * *')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    concurrency:
+      group: entsoe-load-revision
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install OS tzdata
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tzdata
+
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --no-cache-dir tzdata
+          python -m pip install --no-cache-dir -r requirements.txt
+
+      - name: Patch entsoe-py timezone bug
+        shell: bash
+        run: |
+          python - <<'PY'
+          import site, pathlib
+
+          for sp in site.getsitepackages():
+              p = pathlib.Path(sp) / "entsoe" / "entsoe.py"
+              if p.exists():
+                  txt = p.read_text(encoding="utf-8")
+                  if "europe/amsterdam" in txt:
+                      p.write_text(
+                          txt.replace("europe/amsterdam", "Europe/Amsterdam"),
+                          encoding="utf-8"
+                      )
+                      print("Patched:", p)
+                  else:
+                      print("No patch needed:", p)
+                  break
+          else:
+              raise SystemExit("entsoe/entsoe.py not found")
+          PY
+
+      - name: Verify timezone availability
+        run: |
+          python - <<'PY'
+          import zoneinfo
+          z = zoneinfo.ZoneInfo("Europe/Amsterdam")
+          print("ZoneInfo loaded:", z)
+          PY
+
+      - name: Run load update (3d revision backfill)
+        env:
+          ENTSOE_API_TOKEN: ${{ secrets.ENTSOE_API_TOKEN }}
+          PG_HOST:          ${{ secrets.PG_HOST }}
+          PG_PORT:          ${{ secrets.PG_PORT }}
+          PG_DB:            ${{ secrets.PG_DB }}
+          PG_USER:          ${{ secrets.PG_USER }}
+          PG_PASS:          ${{ secrets.PG_PASS }}
+          PG_SSLMODE:       ${{ secrets.PG_SSLMODE }}
+          ROLLING_WINDOW_DAYS: "3"
+          SLEEP_BETWEEN_ZONES_SEC: "1"
+        run: python update_load.py

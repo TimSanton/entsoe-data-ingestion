@@ -119,9 +119,13 @@ def fetch_load_series(country_code: str, bidding_zone: str,
 # ------------- TRANSFORM ----------------
 
 def series_to_records(series: pd.Series, bidding_zone: str):
-    if series is None or series.empty:
+    if series is None or (hasattr(series, 'empty') and series.empty):
         print(f"[WARN] No data returned from ENTSO-E for {bidding_zone}.")
         return []
+
+    # query_load returns a DataFrame with actual + forecast columns — take actual load only
+    if isinstance(series, pd.DataFrame):
+        series = series.iloc[:, 0].dropna()
 
     series = series.copy()
 

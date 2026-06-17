@@ -156,6 +156,6 @@ jobs:
           PG_USER: ${{ secrets.PG_USER }}
           PG_PASS: ${{ secrets.PG_PASS }}
           PG_SSLMODE: ${{ secrets.PG_SSLMODE }}
-          ROLLING_WINDOW_DAYS: "3"
+          ROLLING_WINDOW_DAYS: "7"
         run: |
           python import_day_ahead_prices.py

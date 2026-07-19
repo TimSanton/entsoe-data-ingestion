@@ -32,7 +32,6 @@ GitHub Actions runs each script on a schedule, keeping the database current with
 | `import_day_ahead_prices.py` | Day-ahead prices (EUR/MWh) | 3 days + D+1 | 43 zones |
 | `import_generation_recent_entsoepy.py` | Generation by fuel type (MW) | 48 hours | Major European zones |
 | `import_scheduled_flows.py` | Cross-border scheduled flows (MW) | Rolling window | Key interconnectors |
-| `update_load.py` | Actual and forecast load (MW) | Rolling window | Major European zones |
 
 **Bidding zone coverage** includes all major European markets: AT, BE, BG, HR, CZ, DE-LU, DK1/2, EE, FI, FR, GR, HU, IE-SEM, IT-NORD/CNOR/CSUD/SUD/CALA/SICI/SARD, LV, LT, ME, NL, NO1-5, PL, PT, RO, RS, SK, SI, ES, SE1-4, CH, MK.
 
@@ -87,7 +86,6 @@ ROLLING_WINDOW_DAYS=3
 python import_day_ahead_prices.py
 python import_generation_recent_entsoepy.py
 python import_scheduled_flows.py
-python update_load.py
 ```
 
 ---

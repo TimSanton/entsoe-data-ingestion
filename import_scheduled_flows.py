@@ -3,8 +3,10 @@ print(">>> TOP OF SCRIPT REACHED")
 import os
 import re
 import time
+import threading
 import datetime as dt
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -29,6 +31,9 @@ PG_SSLMODE = os.getenv("PG_SSLMODE", "require")
 ROLLING_WINDOW_DAYS = int(os.getenv("ROLLING_WINDOW_DAYS", "3"))
 REQUEST_DELAY       = float(os.getenv("REQUEST_DELAY", "1.0"))
 RATE_LIMIT_WAIT     = int(os.getenv("RATE_LIMIT_WAIT", "60"))
+MAX_WORKERS         = int(os.getenv("MAX_WORKERS", "6"))
+# Optional fixed start (ISO date/datetime, UTC) for one-off backfills; overrides ROLLING_WINDOW_DAYS
+BACKFILL_START      = os.getenv("BACKFILL_START")
 
 # -------------------- CONTRACT TYPES --------------------
 
@@ -133,16 +138,18 @@ def get_directed_pairs():
 
 # -------------------- CLIENT --------------------
 
-_client = None
+_local = threading.local()
 
 
 def get_client():
-    global _client
-    if _client is None:
+    # one client (and HTTP session) per worker thread
+    client = getattr(_local, "client", None)
+    if client is None:
         if not ENTSOE_API_TOKEN:
             raise RuntimeError("ENTSOE_API_TOKEN is not set")
-        _client = EntsoePandasClient(api_key=ENTSOE_API_TOKEN)
-    return _client
+        client = EntsoePandasClient(api_key=ENTSOE_API_TOKEN)
+        _local.client = client
+    return client
 
 
 # -------------------- FETCH WITH RETRY --------------------
@@ -207,66 +214,72 @@ def upsert_rows(conn, rows: list):
 
 # -------------------- CORE --------------------
 
-def process_pair(from_zone: str, to_zone: str,
-                 contract_label: str, dayahead: bool,
-                 start_utc: dt.datetime, end_utc: dt.datetime,
-                 conn) -> int:
+def fetch_task(from_zone: str, to_zone: str,
+               contract_label: str, dayahead: bool,
+               start_utc: dt.datetime, end_utc: dt.datetime) -> list:
+    """Runs in a worker thread: fetch one direction/contract and return DB rows."""
     ts_start = pd.Timestamp(start_utc).tz_convert("Europe/Brussels")
     ts_end   = pd.Timestamp(end_utc).tz_convert("Europe/Brussels")
 
-    try:
-        series = fetch_flows(from_zone, to_zone, ts_start, ts_end, dayahead)
-    except Exception as e:
-        print(f"    ERROR {fmt(from_zone)}->{fmt(to_zone)} [{contract_label}]: {e}")
-        traceback.print_exc()
-        return 0
-
+    series = fetch_flows(from_zone, to_zone, ts_start, ts_end, dayahead)
     if series is None:
-        return 0
+        return []
 
-    rows = [
+    return [
         (ts.to_pydatetime(), fmt(from_zone), fmt(to_zone),
          float(val), contract_label, SOURCE_NAME)
         for ts, val in series.items()
         if pd.notna(val)
     ]
-    upsert_rows(conn, rows)
-    print(f"    {fmt(from_zone)}->{fmt(to_zone)} [{contract_label}]: {len(rows)} rows")
-    return len(rows)
 
 
 def main():
     now_utc   = dt.datetime.now(dt.timezone.utc).replace(minute=0, second=0, microsecond=0)
-    start_utc = now_utc - dt.timedelta(days=ROLLING_WINDOW_DAYS)
+    if BACKFILL_START:
+        start_utc = pd.Timestamp(BACKFILL_START, tz="UTC").to_pydatetime()
+    else:
+        start_utc = now_utc - dt.timedelta(days=ROLLING_WINDOW_DAYS)
     end_utc   = now_utc + dt.timedelta(days=2)
 
     pairs = get_directed_pairs()
-    print(f"=== ENTSO-E Scheduled Flows | Rolling {ROLLING_WINDOW_DAYS}d window ===")
-    print(f"[INFO] Fetching from {start_utc} → {end_utc}")
-    print(f"[INFO] {len(pairs)} border pairs")
+    tasks = [
+        (from_zone, to_zone, contract_label, dayahead)
+        for frm, to in pairs
+        for from_zone, to_zone in [(frm, to), (to, frm)]
+        for contract_label, dayahead in CONTRACT_TYPES
+    ]
+    print(f"=== ENTSO-E Scheduled Flows | window {start_utc} → {end_utc} ===")
+    print(f"[INFO] {len(pairs)} border pairs, {len(tasks)} requests, {MAX_WORKERS} workers")
 
     conn = get_conn()
     grand_total = 0
+    failures = []
+    t0 = time.time()
 
-    for frm, to in pairs:
-        for from_zone, to_zone in [(frm, to), (to, frm)]:
-            print(f"\n[PAIR] {fmt(from_zone)} -> {fmt(to_zone)}")
-            for contract_label, dayahead in CONTRACT_TYPES:
-                try:
-                    n = process_pair(
-                        from_zone, to_zone,
-                        contract_label, dayahead,
-                        start_utc, end_utc,
-                        conn,
-                    )
-                    grand_total += n
-                except Exception as e:
-                    print(f"  FAILED {fmt(from_zone)}->{fmt(to_zone)} "
-                          f"[{contract_label}]: {e}")
-                    traceback.print_exc()
+    # fetch in parallel, upsert serially on the main thread's connection
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        futures = {
+            pool.submit(fetch_task, f, t, c, d, start_utc, end_utc): (f, t, c)
+            for f, t, c, d in tasks
+        }
+        for fut in as_completed(futures):
+            f, t, c = futures[fut]
+            label = f"{fmt(f)}->{fmt(t)} [{c}]"
+            try:
+                rows = fut.result()
+                upsert_rows(conn, rows)
+                grand_total += len(rows)
+                print(f"    {label}: {len(rows)} rows")
+            except Exception as e:
+                conn.rollback()
+                failures.append(label)
+                print(f"    ERROR {label}: {e}")
+                traceback.print_exc()
 
     conn.close()
-    print(f"\n=== COMPLETE. Total rows upserted: {grand_total} ===")
+    print(f"\n=== COMPLETE in {time.time() - t0:.0f}s. Total rows upserted: {grand_total} ===")
+    if failures:
+        print(f"[WARN] {len(failures)} failed: {', '.join(failures)}")
 
 
 if __name__ == "__main__":
